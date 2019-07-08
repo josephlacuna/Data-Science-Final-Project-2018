@@ -1,0 +1,372 @@
+---
+title: "Final for Data Science"  
+author: "Joseph Manuel, Demetrios Papakostas"
+date: "December 15, 2017"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+**Goals and intro**
+We looked at a data set about movies from kaggle and wanted to perform some exploratory analysis.  Loading in the data it was clear that this was a big set with some unfamiliar terrain.  Our first goal was to perform a sentiment analysis, which we did with the positive and negative words, on the overview of movies in the data set.  The overview was a brief couple sentence synopsis accompanying each film title.  The positive/negative analysis was likely not the appropriate choice, but it is a robust and full list, and we thought it was a good choice then.  The overviews were split into positive, negative, and neutral, and then plotted against the log of revenue, average rating of the film from IMdb, and budget.  There appeared to be little correlation with any of the plots.
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(tm)
+library(wordcloud)
+library(jsonlite)
+library(readr)
+library(knitr)
+library(reshape2)
+#install.packages("XML")
+library(XML)
+#install.packages("RCurl")
+library(RCurl)
+#install.packages("rlist")
+library(rlist)
+theme_set(theme_grey(base_size = 16))
+tmdb_5000_credits<-read_csv('tmdb_5000_credits.csv')
+tmdb_5000_movies<-read_csv('tmdb_5000_movies.csv')
+head(tmdb_5000_credits)
+head(tmdb_5000_movies)
+
+tmdb_5000_movies$release_date<-format(tmdb_5000_movies$release_date, "%Y")
+
+pos.words<-scan('positive-words.txt', what='character', comment.char=',')
+neg.words<-scan('negative-words.txt', what='character', comment.char=',')
+
+
+
+#Here is the code from class with the score.calc function
+score.calc <- function(words) {
+  pos.matches <- sum(words %in% pos.words)
+  neg.matches <- sum(words %in% neg.words)
+  score = pos.matches - neg.matches
+  return(score) }
+
+tmbb500<-tmdb_5000_movies
+word.list<-str_split(tmbb500$overview, '\\s+') #splits into words at the space
+
+scores <- unlist(lapply(word.list,score.calc))
+
+#check the lengths make sense
+length(scores)
+
+
+tmbd500_2<-tmbb500%>%
+mutate(scores=unlist(lapply(word.list,score.calc))) %>%
+mutate(sentiment=ifelse(scores>0, 'positive',
+        ifelse(scores==0,'neutral',
+        ifelse(scores<0, 'negative', 'none'))))%>% 
+ spread(sentiment, revenue)%>%
+  # summarize(meanpos=mean(positive, na.rm=T),
+   #          meanneutral=mean(neutral, na.rm=T),
+    #         meannegative=mean(negative, na.rm=T))%>%
+   gather(sentiment, revenue, positive, neutral, negative) %>%
+  ggplot(aes(x=log(revenue), fill=sentiment))+geom_density(alpha=0.2)
+tmbd500_3<-tmbb500%>%
+mutate(scores=unlist(lapply(word.list,score.calc))) %>%
+mutate(sentiment=ifelse(scores>0, 'positive',
+        ifelse(scores==0,'neutral',
+        ifelse(scores<0, 'negative', 'none'))))%>% 
+ spread(sentiment, budget)%>%
+   gather(sentiment, budget, positive, neutral, negative) %>%
+  ggplot(aes(x=log(budget), fill=sentiment))+geom_density(alpha=0.2)+xlab('vote average')+ylab('Density')+ggtitle('Density of of average rating based on sentiment')+theme(plot.title=element_text(hjust=0.5))
+tmbd500_3
+tmbd500_4<-tmbb500%>%
+mutate(scores=unlist(lapply(word.list,score.calc))) %>%
+mutate(sentiment=ifelse(scores>0, 'positive',
+        ifelse(scores==0,'neutral',
+        ifelse(scores<0, 'negative', 'none'))))%>% 
+ spread(sentiment, revenue)%>%
+   gather(sentiment, revenue, positive, neutral, negative) %>%
+  ggplot(aes(x=log(revenue), fill=sentiment))+geom_density(alpha=0.2)+xlab('log(revenue) dollars')+ylab('Density')+ggtitle('Density of of log(revenue) based on sentiment')+theme(plot.title=element_text(hjust=0.5))
+tmbd500_4
+```
+
+
+
+**Doing a word cloud*
+Here, we made a wordcloud of the most prominent words in the over view of movies provided in the data set.
+
+```{r}
+
+
+words2<-word.list %>%
+  tolower() %>%  
+  strsplit("[[:punct:]]")%>%  
+  unlist()%>%  
+  strsplit(" ")%>% 
+  unlist()%>%  
+  str_trim()  
+
+words3<-words2[words2!=""]  
+
+
+words4<-words3[words3 %in% stopwords('english')==F]  
+head(words4)
+head(table(words4)[order(desc(table(words4)))])
+newtable<-table(words4)
+
+
+
+wordcloud(words4, scale=c(2,.5),colors=1:5, random.order=F, max.words=40, rot.per=.25)
+```
+
+
+
+**Investigating gender data as given by the credits in movies**
+In this section, we applied a naive approach to extract gender and cast data from  movies.  The information was in a JSON format, and in order to extract everything, we made a dataframe for each movie with map_df(fromJSON). Unfortunately, doing this for more than one movie at a time led to a bizarre ``trailing garbage'' error.  Therefore, we made functions that used for loops to extract the dataframes one at a time, and then a function to bind the data frames together.  Unfortunately, we could not get title information into the dataframe in one function, so we had to make a separate function to repeat titles for the length of the credits of the movies, and then bind those columns.  This required another for loop within a function, which took a while to run.  To further complicate issues, some movies had very few cast members recorded, so it was difficult to get a uniform number, and there were typos in order in the data that were tricky to get around.  Thus, for this section, we chose the first 500 members, because the movies were listed based on release date, and the first 5 characters that appeared in the credits, as those are likely the 5 most major characters.  We then analyzed the gender of the top 5 versus the revenue and budgets of the movies, but did not really find anything very interesting.  Note, because it took so long to run, we only included the first 50 movies of the set in the markdown, with the presentation getting 500.
+```{r}
+
+tmbdcred25<-tmdb_5000_credits%>%
+  head(25)
+tmdb_5000_movies=cbind(seq(1:length(tmdb_5000_movies$budget)),tmdb_5000_movies)
+colnames(tmdb_5000_movies)[1]='movieid'
+lentot=length(tmdb_5000_movies$movieid)
+f<- function(n,k, variable){
+  tmdb_5000_credits%>%  
+  slice(n)%>%  #one slice at a time
+  dplyr::select(variable)%>%
+  map_df(fromJSON)%>% #taking text from cast and converting it to data frame
+  mutate(movieid=n)%>%
+  filter(order%in% c(0:k))%>%
+  head(k)  #how many cast from each movie, some typos repeat order, need to get around this
+  #instead use head, which gives just the first however many, since this is in same order as order anyway
+  #we filter it so we only have movies with the order of 6, this means we filter the sets with at least 6 credits, because some movies have less
+}
+tmdb_5000_credits
+
+
+
+newfun<-function(n,k, variable){
+data <- data.frame()
+for (i in 1:n) {
+   data<-rbind(data, f(i,k,variable)) # add to the main data frame
+}
+return(data)
+}
+
+
+#there we go
+
+descrip<-newfun(lentot,4,'cast')  #first person
+
+#beautiful
+descrip%>%
+  filter(order==0)
+
+one=left_join(descrip%>%filter(order==0),tmdb_5000_movies, by='movieid')
+#second factor
+
+
+```
+
+```{r}
+#repeat more generally
+#n is sample size, j is index
+f2<-function(n,j,variable,k){
+ #if we want random sample, however we should save random sample for analyis
+  #not data merhing
+  #sample_n(tmdb_5000_movies, n)%>%  
+  tmdb_5000_movies%>%
+  slice(j)%>%  #one slice at a time
+  dplyr::select(variable)%>%
+  map_df(fromJSON)%>% #taking text from cgenres and converting it to data frame
+
+    #mutate(movieid=cbind(rep(sample_n(tmdb_5000_movies, n)$movieid[j], k)))%>%
+  head(k)
+  #mutate(movieid=cbind(rep(sample_n(tmdb_5000_movies, n)$movieid[j], length(name))))%>%
+  #head(k)  #how many cast from each movie, some typos repeat order, need to get around this
+  #instead use head, which gives just the first however many, since this is in same order as order anyway
+  #we filter it so we only have movies with the order of 6, this means we filter the sets with at least 6 credits, because some movies have less
+}
+
+#picks the genres for each movie!
+
+
+newfun2<-function(N,n,variable,k){
+data <- data.frame()
+for (i in 1:n) {
+   data<-rbind(data, f2(N,i,variable,k)) # add to the main data frame
+}
+return(data)
+}
+
+
+#the 3 indicates we cant have more than 5 genres per movie.  maybe dont need?
+#now, we have random sample of 50 movies, and choose 5 movies from that
+#name is the genre here
+
+genre=newfun2(lentot,lentot, 'genres',1)
+
+names(genre)[2]='genre'
+#assuming country 1 is the main one
+prodcountry=newfun2(lentot,lentot,'production_countries',1)
+
+names(prodcountry)[1:2]=c('abbrev', 'country')
+prodcountry
+
+
+tmdb_5000_movies
+genre%>%
+  group_by(id)%>%
+  arrange(id)
+head(tmdb_5000_movies)
+###
+#g<- function(n){  #extracting the titles from the movies
+  
+ #   for(j in 1:n){  
+#  datay<-tmdb_5000_movies%>%
+ # slice(j)%>%
+#  dplyr::select(title)
+ # }
+  #  return(datay)
+#}
+#newg<-function(n,k){# copying the amount of titles, n movies, k characters per movie
+ # data<-data.frame()
+  #    for (j in 1:n){
+  #  data <- rbind(data,g(j))}
+  #  data[rep(seq_len(nrow(data)), each=k),]
+   # }
+
+#titles<-as.data.frame(newg(lentot,1))
+
+titles=data.frame(rep(tmdb_5000_movies$title,1))
+data.frame(titles)
+tots<-cbind(titles,descrip)
+
+
+```
+
+
+
+
+```{r}
+
+
+tots2<-tots%>%
+  group_by(title)%>%
+  mutate(newcol=ifelse(gender==2, 'M','F'))%>%
+  summarize(countmen=sum(newcol=='M'))
+
+tots3<-left_join(tots2,tmdb_5000_movies)
+tots3<-tots3%>%
+  group_by(release_date)%>%
+  filter(length(release_date)>2)%>%
+  mutate(meanmen=mean(countmen))
+tots3%>%
+  ggplot(aes(x=countmen, y=log(revenue), group=countmen))+geom_boxplot()+xlab('Number of major male character')+ylab('log(revenue) dollars')+ggtitle('Film Revenue vs Number of men in top 5 credits')+theme(plot.title=element_text(hjust=0.5))
+tots3%>%
+  ggplot(aes(x=countmen, y=log(budget), group=countmen ))+geom_boxplot(fill='dodgerblue3')+xlab('Number of major male characters')+ylab('log(budget) dollars')+ggtitle('Film Budget vs Number of men in top 5 credits')+theme(plot.title=element_text(hjust=0.5))
+
+
+
+tots3%>%
+  ggplot(aes(x=as.numeric(release_date), y=(meanmen/5)*100))+geom_point()+xlab('Year')+ylab('Percentage Men')+ggtitle('Percentage Men Major Characters vs Year')+theme(plot.title=element_text(hjust=0.5))+geom_smooth()
+
+```
+
+**First attempt at time gross graph**
+In this section, we present an ugly graph that is misleading.  It shows the mean revenue of movies over time in red, and the median in blue.  We left this with the intent of showing how graphs can be misleading when outside factors are not accounted for.  In the second part, we put the code of our failed attempt to extract the genre data.  The error message was foreign to us, and we were'nt sure where to go.
+```{r}
+meangross<-tmdb_5000_movies%>%
+  group_by(release_date)%>%
+  summarize(avggross=mean(revenue,na.rm=T),
+            mediangross=median(revenue, na.rm=T))%>%
+  ggplot(aes(x=as.numeric(release_date), y=avggross))+geom_point(color='firebrick4')+geom_point(aes(x=as.numeric(release_date),y=mediangross), color='dodgerblue3')+xlab('year')+ylab('Dollars')+ggtitle('Mean and Median gross revenue over time, non inflation')+theme(plot.title=element_text(hjust=0.5))+scale_colour_manual(values=c('firebrick4', 'dodgerblue'),name='Revenue type',breaks=c('Mean','Median'))
+meangross
+
+
+```
+
+**time plots**
+In this section, we filtered out the top grossing movies of each year, the mean of the gross, and the median of the gross (where the gross is the box office success of a movie).  We used the CPI as an inflation adjuster, making use of the melt function, which allows us to set a variable almost as an automatic gather function, meaning we can put column heads into rows, which makes color differentiation much easier. Through some wrangling work, we were able to get the CPI off a website, and took the mean CPI from each year.  After that, it was more traditional wrangling and viz that we were accustomed to, with one trouble being we had to make date numeric, which we had assumed would happen when we formatted the date earlier.  
+```{r}
+topgross<-tmdb_5000_movies%>%
+  group_by(release_date)%>%
+  filter(revenue%in%max(revenue))%>%
+  filter(revenue>1)%>%
+  arrange(desc(release_date))
+topgross2<-topgross %>%
+  dplyr::select(budget,revenue,release_date)
+meangross<-tmdb_5000_movies%>%
+  group_by(release_date)%>%
+  summarize(avggross=mean(revenue,na.rm=T),
+            mediangross=median(revenue, na.rm=T))
+
+
+Molten <- melt(topgross2, id.vars = "release_date")
+meanmolt<-melt(meangross, id.vars='release_date')
+
+pic<-Molten %>%
+  filter(release_date>1939)%>%
+  ggplot(aes(x=as.numeric(release_date), y=log(value), color = variable)) +
+  geom_point() + 
+  labs(y = "Log(Value)", x = "Release Year", title = "Log(Revenue) and Log(Budget) by Release Year of Top Grossing Movies") +
+  scale_x_continuous(breaks=seq(1940,2015,5)) + 
+  geom_smooth()
+pic
+
+theurl <- getURL("https://inflationdata.com/inflation/Consumer_Price_Index/HistoricalCPI.aspx?reloaded=true",.opts = list(ssl.verifypeer = FALSE) )
+tables <- readHTMLTable(theurl)
+
+tables <- list.clean(tables, fun = is.null, recursive = FALSE)
+
+n.rows <- unlist(lapply(tables, function(t) dim(t)[1]))
+
+CPI<-tables[[which.max(n.rows)]]
+
+CPI2<-CPI %>%
+  dplyr::select(Year,Ave.)
+
+CPI2$Year<-as.numeric(as.character(CPI2$Year))
+CPI2$Ave.<-as.numeric(as.character(CPI2$Ave.))
+CPI3<-CPI2 %>%
+  filter(Year != 2017) %>%
+  filter(Year > 1939) %>%
+  mutate(Norm = (Ave./min(Ave.))) %>%  #inflation index
+  mutate(release_date = Year)
+
+Molten$release_date<-as.numeric(as.character(Molten$release_date))
+meanmolt$release_date<-as.numeric(as.character(meanmolt$release_date))
+MoltenFinal<-Molten %>%
+  left_join(CPI3, by="release_date") %>%
+  filter(Year > 1939) %>%
+  mutate(valueNorm = (value / Norm))
+meanmoltfinal<-meanmolt%>%
+  left_join(CPI3, by="release_date") %>%
+  filter(Year > 1939) %>%
+  mutate(normval = (value / Norm))
+
+meanmoltfinal%>%
+  ggplot(aes(x=release_date, y=log(normval), color = variable)) +
+  geom_point() + 
+  labs(y = "Log(ValueNorm)", x = "Release Year", title = "CPI Index Adjusted Values by Release Year of mean/med Grossing Movies") +
+  scale_x_continuous(breaks=seq(1940,2015,5))+geom_smooth()+scale_color_manual(values=c('firebrick4','dodgerblue3'))
+
+MoltenFinal %>%
+  ggplot(aes(x=release_date, y=log(valueNorm), color = variable)) +
+  geom_point() + 
+  labs(y = "Log(ValueNorm)", x = "Release Year", title = "CPI Index Adjusted Values by Release Year of Top Grossing Movies") +
+  scale_x_continuous(breaks=seq(1940,2015,5)) + 
+  geom_smooth()
+```
+
+**Regression Model**
+We originally ran a regression model with revenue and budget not on a log scale, but this led to the violation of the heteroscedascity assumption.  Using the log lowered the r^2, but it appears that the assumptions are no longer violated. The fit still does not appear to be great, and the goal of this project wasn't a regression analysis, but it was cool to see nonetheless. 
+```{r}
+
+tots4<-tots3%>%
+  filter(revenue>0)%>%
+  filter(budget>0)%>%
+  mutate(pctmen=countmen/5)
+
+linmod<-lm(log(revenue)~pctmen+log(budget)+runtime+vote_average,data=tots4)
+summary(linmod)
+ggplot()+geom_point(aes(x=linmod$fitted.values, y=linmod$residuals),size=1.9)+geom_smooth(aes(x=linmod$fitted.values, y=linmod$residuals),method='lm')+xlab('Fitted Values')+ylab('residuals')+ggtitle('Residuals vs fitted values')+theme(plot.title=element_text(hjust=0.5))
+
+ggplot(data=linmod)+geom_histogram(aes(x=linmod$residuals), color='white', fill='dodgerblue3',bins=10)+xlab('Fitted Values')+ylab('residuals')+ggtitle('Histogram of residuals')+theme(plot.title=element_text(hjust=0.5))
+```
+
