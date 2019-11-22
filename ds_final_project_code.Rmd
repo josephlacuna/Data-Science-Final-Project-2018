@@ -1,0 +1,212 @@
+---
+title: "Final for Data Science: Movie Analysis"
+author: "Joseph Manuel"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+This code is from a data science course where I first learned to use R and is a project 
+looking at various movie data values obtained from a Kaggle data set for sentiment 
+analysis and net revenue tracking. This project also demonstrates data wrangling and
+tidying principles for standardizing and creating transparency for the analysis process.
+```{r setup, include = FALSE}
+library(tidyverse)
+library(stringr)
+library(tm)
+library(wordcloud)
+library(jsonlite)
+library(ggplot2)
+library(readr)
+library(knitr)
+library(reshape2)
+library(XML)
+library(RCurl)
+library(rlist)
+
+# importing movie data
+credits_data <-read_csv('tmdb_5000_credits.csv')
+movie_data  <-read_csv('tmdb_5000_movies.csv')
+pos.words <- scan('positive-words.txt', what='character', comment.char=',')
+neg.words <- scan('negative-words.txt', what='character', comment.char=',')
+
+# cleaning data
+movie_data$release_date<-format(movie_data$release_date, "%Y") # establishing years on release date
+
+# score.calc function for sentiment analysis
+score.calc <- function(words) {
+  pos.matches <- sum(words %in% pos.words)
+  neg.matches <- sum(words %in% neg.words)
+  score = pos.matches - neg.matches
+  return(score) }
+```
+
+```{r}
+# splitting word descriptions of each movie and scoring the sentiment
+word.list <- str_split(movie_data$overview, '\\s+') # splits into words at the space
+scores <- unlist(lapply(word.list,score.calc))      # scores the words for each description
+
+# plotting density plots for average ratings by sentiment of movie's description 
+sentiment_ratings <- movie_data %>%
+  mutate(scores=unlist(lapply(word.list,score.calc))) %>%
+  mutate(sentiment=ifelse(scores>0, 'positive',
+        ifelse(scores==0,'neutral',
+        ifelse(scores<0, 'negative', 'none')))) %>% 
+  spread(sentiment, vote_average) %>%
+  gather(sentiment, vote_average, positive, neutral, negative) %>%
+  na.omit() %>%
+  ggplot(aes(x=vote_average, fill=sentiment,xmin=0,xmax=10))+geom_density(alpha=0.2)
+sentiment_ratings
+```
+```{r}
+# creating a word cloud for the most common words used in movie descriptions
+# formatting the words to be standardized
+words.cloud <- word.list %>%
+  tolower() %>% 
+  strsplit("[[:punct:]]") %>%  
+  unlist() %>%  
+  strsplit(" ") %>% 
+  unlist() %>%  
+  str_trim()  
+
+#removing empty words and stopwords
+words.cloud <- words.cloud[words.cloud!=""]  
+words.cloud <- words.cloud[words.cloud %in% stopwords('english') == F]
+
+wordcloud(words.cloud, scale=c(2,1),colors=1:3, random.order=F, max.words=100, rot.per=.25)
+```
+```{r}
+# Investigating gender data as given by the credits in movies
+cast_movie <- function(n,k){
+  credits_data %>%  
+  slice(n)%>%                     # one slice at a time
+  dplyr::select(cast) %>%         # selects cast column
+  map_df(fromJSON) %>%            # taking text from cast and converting it to data frame
+  head(k)                         # takes first ten in credit (which is ordered by prevalance)
+}
+
+# creating cast data for multiple movies
+casts_movie <- function(n,k){
+  data <- data.frame()
+  for (i in 1:n) {
+  data <- rbind(data, cast_movie(i,k)) # add to the main data frame
+  }
+  return(data)
+}
+
+# casts_movie(n,k)
+# n corresponds to the first n number of movies to operate on and create the df from
+# k corresponds to number of cast members for each movie to extract
+
+casts_n = 1000
+casts_k = 5
+
+all_casts <- casts_movie(casts_n, casts_k)  # all selected cast data
+
+# extracting the titles from the movies
+title_movie <- function(n){
+  credits_data %>%
+  slice(n) %>%                  # one slice at a time
+  dplyr::select(title)          # selects title column
+}
+
+# creating title data for multiple movies
+titles_movie <- function(n,k){
+  data <- data.frame()
+    for (j in 1:n) {
+    data <- rbind(data,title_movie(j))}
+    data[rep(seq_len(nrow(data)), each=k),]
+    }
+
+all_titles <- titles_movie(casts_n, casts_k) # all titles for given casts picked
+
+# binding together extracted title and cast data
+titles_credits <- cbind(all_titles, all_casts)
+
+# counting the amount of men for each selected movie
+men_credits <- titles_credits %>%
+  group_by(title) %>%
+  mutate(newcol=ifelse(gender==2, 'M','F')) %>%
+  summarize(countmen=sum(newcol=='M'))
+
+men_movie_data <- left_join(men_credits, movie_data)
+
+men_movie_data <- men_movie_data %>%
+  group_by(release_date) %>%
+  filter(length(release_date)>2) %>% #filters out non-data
+  mutate(meanmen=mean(countmen))
+
+men_movie_data %>%
+  na.omit() %>%
+  ggplot(aes(x=countmen, y=log(revenue), group=countmen )) + geom_boxplot(fill='dodgerblue3')+
+  geom_boxplot(aes(x=countmen, y=log(budget), group=countmen), fill='firebrick4')
+
+men_movie_data %>%
+  na.omit() %>%
+  ggplot(aes(x=as.numeric(release_date), y=(meanmen/5)*100))+geom_point()+xlab('Year')+ylab('Percentage Men')+ggtitle('Percentage Men Major Characters vs Year')+theme(plot.title=element_text(hjust=0.5))+geom_smooth()
+
+
+```
+
+```{r}
+# Investigating gross revenue for movies historically
+# finding top grossing movie for each year
+top_gross <- movie_data %>%
+  group_by(release_date) %>%
+  filter(revenue%in%max(revenue)) %>%
+  filter(revenue>1) %>%
+  arrange(desc(release_date)) %>%
+  select(budget,revenue,release_date)
+
+budgets_revenues <- melt(top_gross, id.vars = "release_date")
+budgets_revenues$release_date <- as.numeric(as.character(budgets_revenues$release_date))
+
+# plotting un-adjusted budget and revenue relationship for top grossing movies
+budgets_revenues_plot <- budgets_revenues %>%
+  filter(release_date>1939) %>%
+  ggplot(aes(x=release_date, y=log(value), color = variable)) +
+  geom_point() + 
+  labs(y = "Log(Value)", x = "Release Year", title = "Log(Revenue) and Log(Budget) by Release Year of Top Grossing Movies") +
+  scale_x_continuous(breaks=seq(1940,2015,5)) + 
+  geom_smooth()
+
+budgets_revenues_plot
+
+# Investigating previous plot with inflation data and appropriate adjustments
+inflationurl <- getURL("https://inflationdata.com/inflation/Consumer_Price_Index/HistoricalCPI.aspx?reloaded=true",.opts = list(ssl.verifypeer = FALSE) )
+inflation_table <- readHTMLTable(inflationurl)
+inflation_table <- list.clean(inflation_table, fun = is.null, recursive = FALSE)
+n.rows <- unlist(lapply(inflation_table, function(t) dim(t)[1]))
+
+# creating df for average inflation metric for each year
+CPI <- inflation_table[[which.max(n.rows)]] %>%
+  select(Year, Ave.)
+
+# correcting data type to numeric
+CPI$Year<-as.numeric(as.character(CPI$Year))
+CPI$Ave.<-as.numeric(as.character(CPI$Ave.))
+
+# creating Norm variable representative of relative inflation
+CPI <- CPI %>%
+  filter(Year < 2017) %>%  # filtering for the years represented in the data
+  filter(Year > 1939) %>%
+  mutate(Norm = (Ave./min(Ave.))) %>%
+  mutate(release_date = Year)
+
+# applying relative inflation Norm variable on values
+adjusted_budgets_revenues <- budgets_revenues %>%
+  left_join(CPI, by="release_date") %>%
+  filter(Year > 1939) %>%
+  mutate(valueNorm = (value / Norm))
+
+# plotting adjusted budget and revenue relationship for top grossing movies
+adjusted_budgets_revenues_plot <- adjusted_budgets_revenues %>%
+  ggplot(aes(x=release_date, y=log(valueNorm), color = variable)) +
+  geom_point() + 
+  labs(y = "Log(ValueNorm)", x = "Release Year", title = "CPI Index Adjusted Values by Release Year of Top Grossing Movies") +
+  scale_x_continuous(breaks=seq(1940,2015,5)) + 
+  geom_smooth()
+
+adjusted_budgets_revenues_plot
+```
+
+
